@@ -95,3 +95,148 @@ jobs:
           name: wasm-contracts
           path: dabdub_contracts/target/wasm32v1-none/release/*.wasm
           retention-days: 30
+
+      # Posts a per-contract WASM size table to the pull request as a comment.
+      # The current sizes come from the freshly built artifacts; the previous
+      # sizes are read from the base branch's build so the delta reflects the
+      # change introduced by this PR. Contracts above 80% of the 64 KB budget
+      # are highlighted yellow, contracts over budget are highlighted red.
+      - name: Report contract sizes to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          BUDGET_BYTES: "65536"
+          WASM_DIR: dabdub_contracts/target/wasm32v1-none/release
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const budget = Number(process.env.BUDGET_BYTES);
+            const warnThreshold = Math.floor(budget * 0.8);
+            const wasmDir = process.env.WASM_DIR;
+
+            function readSizes(dir) {
+              const sizes = {};
+              if (!fs.existsSync(dir)) return sizes;
+              for (const file of fs.readdirSync(dir)) {
+                if (!file.endsWith('.wasm')) continue;
+                const name = path.basename(file, '.wasm');
+                sizes[name] = fs.statSync(path.join(dir, file)).size;
+              }
+              return sizes;
+            }
+
+            function formatBytes(bytes) {
+              return `${bytes.toLocaleString('en-US')} B`;
+            }
+
+            function formatDelta(delta) {
+              if (delta === null) return 'n/a';
+              if (delta === 0) return '0 B';
+              const sign = delta > 0 ? '+' : '-';
+              return `${sign}${Math.abs(delta).toLocaleString('en-US')} B`;
+            }
+
+            const current = readSizes(wasmDir);
+            const contracts = Object.keys(current).sort();
+
+            if (contracts.length === 0) {
+              core.info('No WASM artifacts found; skipping size report.');
+              return;
+            }
+
+            // Fetch the base branch's previously reported sizes from the most
+            // recent successful run on the base ref, if available.
+            let previous = {};
+            try {
+              const { owner, repo } = context.repo;
+              const base = context.payload.pull_request.base.ref;
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: 'ci.yml',
+                branch: base,
+                status: 'success',
+                per_page: 1,
+              });
+              const run = runs.data.workflow_runs[0];
+              if (run) {
+                const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner,
+                  repo,
+                  run_id: run.id,
+                });
+                const artifact = artifacts.data.artifacts.find(
+                  (a) => a.name === 'wasm-contracts'
+                );
+                if (artifact) {
+                  const download = await github.rest.actions.downloadArtifact({
+                    owner,
+                    repo,
+                    artifact_id: artifact.id,
+                    archive_format: 'zip',
+                  });
+                  const AdmZip = require('adm-zip');
+                  const zip = new AdmZip(Buffer.from(download.data));
+                  for (const entry of zip.getEntries()) {
+                    if (!entry.entryName.endsWith('.wasm')) continue;
+                    const name = path.basename(entry.entryName, '.wasm');
+                    previous[name] = entry.header.size;
+                  }
+                }
+              }
+            } catch (err) {
+              core.info(`Could not load previous sizes: ${err.message}`);
+            }
+
+            const rows = contracts.map((name) => {
+              const size = current[name];
+              const prev = previous[name] ?? null;
+              const delta = prev === null ? null : size - prev;
+              let status = '✅';
+              if (size > budget) status = '🔴 over budget';
+              else if (size > warnThreshold) status = '🟡 near budget';
+              return `| ${name} | ${formatBytes(size)} | ${
+                prev === null ? 'n/a' : formatBytes(prev)
+              } | ${formatDelta(delta)} | ${status} |`;
+            });
+
+            const body = [
+              '### Soroban contract WASM sizes',
+              '',
+              `Budget: ${formatBytes(budget)} per contract (warn at ${formatBytes(
+                warnThreshold
+              )}).`,
+              '',
+              '| Contract | Current size | Previous size | Delta | Status |',
+              '| --- | --- | --- | --- | --- |',
+              ...rows,
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const marker = '### Soroban contract WASM sizes';
+            const comments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+            });
+            const existing = comments.data.find((c) =>
+              c.body && c.body.startsWith(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
