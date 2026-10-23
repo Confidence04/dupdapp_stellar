@@ -61,6 +61,20 @@ cargo build --target wasm32v1-none --release
 cargo test
 ```
 
+### Lint
+
+`make lint` runs all static checks in sequence — `cargo clippy`, `cargo fmt --check`, and `cargo audit` — stopping at the first failure with a message identifying which check failed:
+
+```bash
+make lint
+```
+
+The pre-push git hook (`.githooks/pre-push`) runs `make lint`, so install the hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## CI/CD
 
 - **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) — runs `cargo test`, coverage (tarpaulin), and a WASM build on every push/PR.
@@ -82,6 +96,10 @@ Actual times vary with runner load and the size of the change; the warm-cache pa
 ## Monitoring
 
 Grafana/Loki/Promtail configs under [`grafana/`](grafana/) and [`docker-compose.yml`](docker-compose.yml) are provided for local observability tooling; see [`monitoring/`](monitoring/) for uptime/status-page setup.
+
+### Alerts
+
+Grafana alert rules are provisioned from [`grafana/provisioning/alerting/`](grafana/provisioning/alerting/). The `ESCROW.emergency_drain` rule fires within 1 minute of any emergency drain event on `payment_escrow`, pages PagerDuty, and notifies Slack `#security`. See the [emergency drain runbook](docs/security/emergency_drain_runbook.md).
 
 ## Docs
 
@@ -106,3 +124,9 @@ Grafana/Loki/Promtail configs under [`grafana/`](grafana/) and [`docker-compose.
 
 <!-- handsoff-issue-1113 -->
 - #1113: payment_escrow: the highest-risk functions (upgrade, emergency_drain's XLM path, set_registry(None)) have the thinnest test coverage
+
+<!-- handsoff-issue-1313 -->
+- #1313: [P3] Add contract README for each of the 14 contracts
+
+<!-- handsoff-issue-1323 -->
+- #1323: [P3] Add Grafana alert rule for emergency_drain event

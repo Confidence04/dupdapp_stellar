@@ -1,38 +1,32 @@
+# Makefile for common development tasks
+
 CONTRACTS_DIR := dabdub_contracts
 WASM_DIR      := $(CONTRACTS_DIR)/target/wasm32v1-none/release
 WASM_SIZE_LIMIT := 65536  # 64 KB
 WASM_SIZE_WARN  := 52428  # 80% of 64 KB
 WASM_SIZE_REPORT := $(CONTRACTS_DIR)/wasm-size-report.md
 
-.PHONY: build build-optimised check-wasm-size wasm-size-report test
+.PHONY: build build-optimised check-wasm-size wasm-size-report test verify-deployment lint lint-clippy lint-fmt lint-audit
 
-build:
-	cd $(CONTRACTS_DIR) && cargo build --target wasm32v1-none --release
+# Run all lint checks in sequence. Stops on the first failure with a clear
+# message identifying which check failed.
+lint:
+	@echo "==> [1/3] Running clippy..."
+	@$(MAKE) --no-print-directory lint-clippy || { echo "ERROR: clippy check failed. Run 'cargo clippy --all-targets --all-features -- -D warnings' to see details." >&2; exit 1; }
+	@echo "==> [2/3] Running fmt check..."
+	@$(MAKE) --no-print-directory lint-fmt || { echo "ERROR: fmt check failed. Run 'cargo fmt --all' to fix formatting." >&2; exit 1; }
+	@echo "==> [3/3] Running audit..."
+	@$(MAKE) --no-print-directory lint-audit || { echo "ERROR: audit check failed. Run 'cargo audit' to see details." >&2; exit 1; }
+	@echo "==> All lint checks passed."
 
-build-optimised: build
-	@echo "Running wasm-opt -Oz on all contract WASMs..."
-	@for wasm in $(WASM_DIR)/*.wasm; do \
-		echo "  optimising $$wasm"; \
-		wasm-opt -Oz --output $$wasm $$wasm; \
-	done
-	@echo "Done."
+lint-clippy:
+	cargo clippy --all-targets --all-features -- -D warnings
 
-check-wasm-size: build-optimised
-	@echo "Checking WASM sizes (limit: $(WASM_SIZE_LIMIT) bytes)..."
-	@failed=0; \
-	for wasm in $(WASM_DIR)/*.wasm; do \
-		size=$$(wc -c < $$wasm); \
-		if [ $$size -gt $(WASM_SIZE_LIMIT) ]; then \
-			echo "  FAIL  $$wasm  $$size bytes  (limit $(WASM_SIZE_LIMIT))"; \
-			failed=1; \
-		else \
-			echo "  OK    $$wasm  $$size bytes"; \
-		fi; \
-	done; \
-	if [ $$failed -ne 0 ]; then \
-		echo "One or more contracts exceed the $(WASM_SIZE_LIMIT)-byte limit."; \
-		exit 1; \
-	fi
+lint-fmt:
+	cargo fmt --all -- --check
+
+lint-audit:
+	cargo audit
 
 # Emit a Markdown table of contract WASM sizes for posting to a PR comment.
 # Columns: contract | current size | previous size | delta.
@@ -64,3 +58,6 @@ wasm-size-report: build-optimised
 
 test:
 	cd $(CONTRACTS_DIR) && cargo test
+
+verify-deployment:
+	bash scripts/verify-deployment.sh

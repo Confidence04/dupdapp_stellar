@@ -36,3 +36,32 @@ soroban contract invoke \
 - Require multisig for admin operations where possible
 - Monitor all scheduled changes via event logs
 - Use short `ledgers_to_lock` values (1-2 hours)
+
+## Incident: `ESCROW.emergency_drain` Event
+
+### Symptoms
+- Grafana alert `payment_escrow: emergency_drain` fires (pages PagerDuty + Slack `#security`)
+- A Loki log line contains an `ESCROW.emergency_drain` event on `payment_escrow`
+
+### Response Steps
+
+1. **Acknowledge the page** in PagerDuty and open the `#security` Slack thread.
+
+2. **Confirm the event** in Loki:
+```logql
+{contract="payment_escrow"} |= "ESCROW.emergency_drain"
+```
+
+3. **Identify the caller** - inspect the event payload for the invoking address and
+   correlate with the escrow contract's admin/operator keys.
+
+4. **Freeze further activity** - if the drain was not authorized, pause escrow
+   operations and rotate any exposed operator keys.
+
+5. **Escalate** - notify the security lead and, if funds moved, begin the
+   incident-response fund-tracing process.
+
+### Prevention
+- Keep escrow operator keys in secure hardware wallets / multisig
+- Alert on any `ESCROW.emergency_drain` event (see Grafana rule `payment_escrow_emergency_drain`)
+- Review drain authorization policy regularly
